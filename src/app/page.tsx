@@ -14,6 +14,14 @@ const DEFAULT_PERIODS: TimePeriod[] = [
 
 const LS_KEY_PERIODS = 'rider-excel-periods'
 const LS_KEY_RESULT = 'rider-excel-result'
+const LS_KEY_SCHEDULE = 'rider-excel-schedule'
+
+interface StoredScheduleConfig {
+  name: string
+  dataUrl: string
+  periods: TimePeriod[]
+  scheduleDate?: string
+}
 
 function loadFromStorage<T>(key: string, fallback: T): T {
   if (typeof window === 'undefined') return fallback
@@ -25,16 +33,73 @@ function loadFromStorage<T>(key: string, fallback: T): T {
   }
 }
 
+async function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '')
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+}
+
+function dataUrlToFile(dataUrl: string, fileName: string): File {
+  const [meta, base64] = dataUrl.split(',')
+  const mimeMatch = meta?.match(/data:(.*?);/)
+  const mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream'
+  const binary = atob(base64 || '')
+  const length = binary.length
+  const bytes = new Uint8Array(length)
+  for (let i = 0; i < length; i++) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return new File([bytes], fileName, { type: mime })
+}
+
+function sanitizePeriods(periods: TimePeriod[]): TimePeriod[] {
+  return periods.filter(p => p.start && p.end)
+}
+
 export default function HomePage() {
   const [file, setFile] = useState<File | null>(null)
   const [periods, setPeriods] = useState<TimePeriod[]>(DEFAULT_PERIODS)
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [scheduleFile, setScheduleFile] = useState<File | null>(null)
+  const [showScheduleConfig, setShowScheduleConfig] = useState(false)
+  const [draftPeriods, setDraftPeriods] = useState<TimePeriod[]>(DEFAULT_PERIODS)
+  const [draftScheduleFile, setDraftScheduleFile] = useState<File | null>(null)
+  const [scheduleInfo, setScheduleInfo] = useState<{ fileName: string; scheduleDate?: string } | null>(null)
+  const [draftScheduleDate, setDraftScheduleDate] = useState<string>('')
+  const [schedulePreviewLoading, setSchedulePreviewLoading] = useState(false)
+  const [schedulePreviewError, setSchedulePreviewError] = useState('')
+  const [configSaving, setConfigSaving] = useState(false)
 
   useEffect(() => {
-    setPeriods(loadFromStorage(LS_KEY_PERIODS, DEFAULT_PERIODS))
+    const storedPeriods = loadFromStorage(LS_KEY_PERIODS, DEFAULT_PERIODS)
+    setPeriods(storedPeriods)
+    setDraftPeriods(storedPeriods)
     setResult(loadFromStorage<AnalysisResult | null>(LS_KEY_RESULT, null))
+
+    const storedSchedule = loadFromStorage<StoredScheduleConfig | null>(LS_KEY_SCHEDULE, null)
+    if (storedSchedule && storedSchedule.dataUrl && storedSchedule.name) {
+      try {
+        const restoredFile = dataUrlToFile(storedSchedule.dataUrl, storedSchedule.name)
+        setScheduleFile(restoredFile)
+        setDraftScheduleFile(restoredFile)
+        if (storedSchedule.periods && storedSchedule.periods.length > 0) {
+          setPeriods(storedSchedule.periods)
+          setDraftPeriods(storedSchedule.periods)
+        }
+        setScheduleInfo({ fileName: storedSchedule.name, scheduleDate: storedSchedule.scheduleDate })
+        setDraftScheduleDate(storedSchedule.scheduleDate ?? '')
+      } catch (err) {
+        console.error('恢复排班配置失败', err)
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem(LS_KEY_SCHEDULE)
+        }
+      }
+    }
   }, [])
 
   useEffect(() => {
@@ -51,10 +116,10 @@ export default function HomePage() {
 
   const handleAnalyze = useCallback(async () => {
     if (!file) {
-      setError('请先上传文件')
+      setError('请先上传订单Excel')
       return
     }
-    const validPeriods = periods.filter(p => p.start && p.end)
+    const validPeriods = sanitizePeriods(periods)
     if (validPeriods.length === 0) {
       setError('请至少配置一个时段')
       return
@@ -66,16 +131,37 @@ export default function HomePage() {
       const fd = new FormData()
       fd.append('file', file)
       fd.append('timePeriods', JSON.stringify(validPeriods))
+      if (scheduleFile) {
+        fd.append('scheduleFile', scheduleFile)
+      }
 
       const res = await fetch('/api/analyze', { method: 'POST', body: fd })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || '分析失败')
       setResult(data)
+      if (Array.isArray(data.timePeriods)) {
+        setPeriods(data.timePeriods)
+        setDraftPeriods(data.timePeriods)
+      }
+      if (data.scheduleDate) {
+        setScheduleInfo(prev => {
+          const fileName = prev?.fileName || scheduleFile?.name || ''
+          if (!fileName) return prev
+          return { fileName, scheduleDate: data.scheduleDate }
+        })
+        if (typeof window !== 'undefined') {
+          const stored = loadFromStorage<StoredScheduleConfig | null>(LS_KEY_SCHEDULE, null)
+          if (stored) {
+            stored.scheduleDate = data.scheduleDate
+            localStorage.setItem(LS_KEY_SCHEDULE, JSON.stringify(stored))
+          }
+        }
+      }
     } catch (err) {
       setError(String(err))
     }
     setLoading(false)
-  }, [file, periods])
+  }, [file, periods, scheduleFile])
 
   const handleSave = useCallback(async () => {
     if (!result) return
@@ -139,6 +225,77 @@ export default function HomePage() {
     })
   }, [result])
 
+  const handleDraftScheduleSelect = useCallback(async (selected: File) => {
+    setDraftScheduleFile(selected)
+    setSchedulePreviewError('')
+    setDraftScheduleDate('')
+    setSchedulePreviewLoading(true)
+    try {
+      const fd = new FormData()
+      fd.append('scheduleFile', selected)
+      const current = sanitizePeriods(draftPeriods)
+      fd.append('timePeriods', JSON.stringify(current))
+      const res = await fetch('/api/schedule', { method: 'POST', body: fd })
+      const data = await res.json()
+      if (!res.ok) {
+        throw new Error(data.error || '解析排班失败')
+      }
+      if (Array.isArray(data.mergedPeriods) && data.mergedPeriods.length > 0) {
+        setDraftPeriods(data.mergedPeriods)
+      }
+      setDraftScheduleDate(data.scheduleDate ?? '')
+    } catch (err) {
+      setSchedulePreviewError(String(err))
+    } finally {
+      setSchedulePreviewLoading(false)
+    }
+  }, [draftPeriods])
+
+  const handleDraftScheduleClear = useCallback(() => {
+    setDraftScheduleFile(null)
+    setDraftScheduleDate('')
+    setSchedulePreviewError('')
+    setSchedulePreviewLoading(false)
+  }, [])
+
+  const handleScheduleConfigSave = useCallback(async () => {
+    setConfigSaving(true)
+    setSchedulePreviewError('')
+    try {
+      const sanitized = sanitizePeriods(draftPeriods)
+      const nextPeriods = sanitized.length > 0 ? sanitized : DEFAULT_PERIODS
+      setPeriods(nextPeriods)
+      setDraftPeriods(nextPeriods)
+
+      if (draftScheduleFile) {
+        setScheduleFile(draftScheduleFile)
+        setScheduleInfo({ fileName: draftScheduleFile.name, scheduleDate: draftScheduleDate || undefined })
+        if (typeof window !== 'undefined') {
+          const dataUrl = await fileToDataUrl(draftScheduleFile)
+          const stored: StoredScheduleConfig = {
+            name: draftScheduleFile.name,
+            dataUrl,
+            periods: nextPeriods,
+            scheduleDate: draftScheduleDate || undefined,
+          }
+          localStorage.setItem(LS_KEY_SCHEDULE, JSON.stringify(stored))
+        }
+      } else {
+        setScheduleFile(null)
+        setScheduleInfo(null)
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem(LS_KEY_SCHEDULE)
+        }
+      }
+
+      setShowScheduleConfig(false)
+    } catch (err) {
+      setSchedulePreviewError(String(err))
+    } finally {
+      setConfigSaving(false)
+    }
+  }, [draftPeriods, draftScheduleDate, draftScheduleFile])
+
   const handleLoadHistory = useCallback((data: AnalysisResult) => {
     setResult(data)
     setPeriods(data.timePeriods)
@@ -154,14 +311,61 @@ export default function HomePage() {
 
         <div className="bg-white rounded-xl border border-gray-200/80 px-6 py-4 mb-4">
           <div className="flex items-center gap-6 flex-wrap">
-            <div className="flex items-center gap-3 min-w-0">
-              <FileUpload onFileSelect={f => { setFile(f); setResult(null); setError('') }} />
-            </div>
-            <div className="w-px h-8 bg-gray-200 hidden sm:block" />
-            <div className="flex-1 min-w-[260px]">
-              <TimePeriodConfig periods={periods} onChange={setPeriods} disabled={loading} />
+            <div className="flex items-center gap-4 min-w-0 flex-1">
+              <FileUpload
+                onFileSelect={f => { setFile(f); setResult(null); setError('') }}
+                inputId="orders-input"
+                placeholder="上传订单Excel"
+                disabled={loading}
+              />
+              <div className="hidden sm:block w-px h-8 bg-gray-200" />
+              <div className="flex flex-col gap-1 text-xs text-gray-500 min-w-0">
+                <div className="flex flex-wrap gap-1 items-center">
+                  <span className="font-medium text-gray-600">当前时段:</span>
+                  {periods.filter(p => p.start && p.end).length > 0 ? (
+                    periods
+                      .filter(p => p.start && p.end)
+                      .map(p => (
+                        <span key={`${p.start}-${p.end}`} className="px-2 py-0.5 bg-gray-100 rounded-full">
+                          {p.start}-{p.end}
+                        </span>
+                      ))
+                  ) : (
+                    <span className="text-gray-400">尚未配置</span>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-2 items-center">
+                  <div className="flex items-center gap-1">
+                    <span className="font-medium text-gray-600">排班文件:</span>
+                    {scheduleInfo ? (
+                      <span className="px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded-full truncate max-w-[200px]">
+                        {scheduleInfo.fileName}
+                      </span>
+                    ) : (
+                      <span className="text-gray-400">未上传</span>
+                    )}
+                  </div>
+                  {scheduleInfo?.scheduleDate && (
+                    <span className="px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full">排班日期 {scheduleInfo.scheduleDate}</span>
+                  )}
+                </div>
+              </div>
             </div>
             <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setDraftPeriods(periods)
+                  setDraftScheduleFile(scheduleFile)
+                  setDraftScheduleDate(scheduleInfo?.scheduleDate ?? '')
+                  setSchedulePreviewError('')
+                  setSchedulePreviewLoading(false)
+                  setShowScheduleConfig(true)
+                }}
+                className="h-9 px-4 border border-gray-200 text-gray-600 text-sm rounded-lg font-medium hover:border-blue-400 hover:text-blue-600 transition-colors"
+              >
+                配置排班
+              </button>
               <button
                 type="button"
                 onClick={handleAnalyze}
@@ -213,6 +417,74 @@ export default function HomePage() {
           <RankingTable data={result} loading={loading} />
         </div>
       </div>
+      {showScheduleConfig && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-xl p-6 space-y-5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-gray-800">配置排班与时段</h3>
+              <button
+                type="button"
+                onClick={() => setShowScheduleConfig(false)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <h4 className="text-sm font-medium text-gray-600 mb-2">班次时段</h4>
+                <TimePeriodConfig periods={draftPeriods} onChange={setDraftPeriods} />
+              </div>
+              <div>
+                <h4 className="text-sm font-medium text-gray-600 mb-2">排班Excel</h4>
+                <div className="flex items-center gap-3">
+                  <FileUpload
+                    onFileSelect={handleDraftScheduleSelect}
+                    inputId="schedule-modal-input"
+                    placeholder="选择排班Excel"
+                    disabled={schedulePreviewLoading || configSaving}
+                  />
+                  {draftScheduleFile && (
+                    <button
+                      type="button"
+                      onClick={handleDraftScheduleClear}
+                      className="text-xs text-red-500 hover:text-red-600"
+                    >
+                      清除
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs text-gray-400 mt-2">常见做法是上传一周排班 Excel，系统会自动取最早日期的班次作为分析依据。</p>
+                {schedulePreviewLoading && <p className="text-xs text-blue-500 mt-1">解析排班中...</p>}
+                {schedulePreviewError && <p className="text-xs text-red-500 mt-1">{schedulePreviewError}</p>}
+                {draftScheduleFile && !schedulePreviewLoading && !schedulePreviewError && (
+                  <p className="text-xs text-indigo-600 mt-1 truncate">当前文件：{draftScheduleFile.name}</p>
+                )}
+                {draftScheduleDate && (
+                  <p className="text-xs text-green-600 mt-1">识别到排班日期：{draftScheduleDate}</p>
+                )}
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowScheduleConfig(false)}
+                className="px-4 py-2 text-sm rounded-lg text-gray-500 hover:text-gray-700"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={handleScheduleConfigSave}
+                disabled={schedulePreviewLoading || configSaving}
+                className={`px-4 py-2 text-sm rounded-lg text-white ${schedulePreviewLoading || configSaving ? 'bg-blue-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
+              >
+                {configSaving ? '保存中...' : '保存配置'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   )
 }
