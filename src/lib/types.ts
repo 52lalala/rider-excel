@@ -4,9 +4,13 @@ export interface TimePeriod {
 }
 
 export interface RiderStats {
+  id: string
   name: string
   totalOrders: number
   periodOrders: Record<string, number>
+  scheduleStatus?: string
+  scheduledPeriods?: string[]
+  shiftLabels?: string[]
 }
 
 export interface AnalysisResult {
@@ -15,6 +19,7 @@ export interface AnalysisResult {
   totalOrders: number
   riders: RiderStats[]
   timePeriods: TimePeriod[]
+  scheduleDate?: string
 }
 
 export interface HistoryRecord {
@@ -26,6 +31,16 @@ export interface HistoryRecord {
 }
 
 export interface OrderRow {
+  riderId: string
   riderName: string
   orderTime: string
+}
+
+export interface RiderScheduleEntry {
+  riderId: string
+  riderName: string
+  date: string
+  status: string
+  shiftLabels: string[]
+  periods: string[]
 }
