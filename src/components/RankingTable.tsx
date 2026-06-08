@@ -37,12 +37,12 @@ export default function RankingTable({ data, loading }: Props) {
       </div>
       <table className="w-full text-sm border-collapse">
         <thead>
-          <tr className="bg-gray-100">
-            <th className="px-3 py-2 text-left font-medium text-gray-600 border-b w-12">排名</th>
-            <th className="px-3 py-2 text-left font-medium text-gray-600 border-b">骑手</th>
-            <th className="px-3 py-2 text-right font-medium text-gray-600 border-b">总单量</th>
+          <tr className="bg-gray-50">
+            <th className="px-4 py-3 text-center font-semibold text-gray-500 border-b border-gray-200 w-16">排名</th>
+            <th className="px-4 py-3 text-center font-semibold text-gray-500 border-b border-gray-200">骑手</th>
+            <th className="px-4 py-3 text-center font-semibold text-gray-500 border-b border-gray-200">总单量</th>
             {periodKeys.map(key => (
-              <th key={key} className="px-3 py-2 text-right font-medium text-gray-600 border-b whitespace-nowrap">
+              <th key={key} className="px-4 py-3 text-center font-semibold text-gray-500 border-b border-gray-200 whitespace-nowrap">
                 {key}
               </th>
             ))}
@@ -50,12 +50,12 @@ export default function RankingTable({ data, loading }: Props) {
         </thead>
         <tbody>
           {data.riders.map((rider, idx) => (
-            <tr key={rider.name} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}>
-              <td className="px-3 py-2 border-b text-gray-500">{idx + 1}</td>
-              <td className="px-3 py-2 border-b font-medium">{rider.name}</td>
-              <td className="px-3 py-2 border-b text-right font-semibold text-blue-600">{rider.totalOrders}</td>
+            <tr key={rider.name} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}>
+              <td className="px-4 py-3 border-b border-gray-100 text-center text-gray-400 font-medium">{idx + 1}</td>
+              <td className="px-4 py-3 border-b border-gray-100 text-center font-medium text-gray-800">{rider.name}</td>
+              <td className="px-4 py-3 border-b border-gray-100 text-center font-bold text-blue-600">{rider.totalOrders}</td>
               {periodKeys.map(key => (
-                <td key={key} className="px-3 py-2 border-b text-right">{rider.periodOrders[key] ?? 0}</td>
+                <td key={key} className="px-4 py-3 border-b border-gray-100 text-center text-gray-700">{rider.periodOrders[key] ?? 0}</td>
               ))}
             </tr>
           ))}
