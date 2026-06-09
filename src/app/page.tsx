@@ -212,10 +212,11 @@ export default function HomePage() {
   const handleCopy = useCallback(() => {
     if (!result || result.riders.length === 0) return
     const periodKeys = result.timePeriods.map(p => `${p.start}-${p.end}`)
-    const header = ['排名', '骑手', '总单量', ...periodKeys]
+    const header = ['排名', '骑手', '班次', '总单量', ...periodKeys]
     const rows = result.riders.map((r, i) => [
       String(i + 1),
       r.name,
+      r.shiftLabels && r.shiftLabels.length > 0 ? r.shiftLabels.join('、') : '—',
       String(r.totalOrders),
       ...periodKeys.map(k => String(r.periodOrders[k] ?? 0)),
     ])
